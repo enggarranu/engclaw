@@ -80,6 +80,17 @@ class TelegramBridge:
         # Membungkus teks ke blok <pre> untuk tampilan monospaced rapi
         return f"<pre>{self._escape_html(s)}</pre>"
 
+    def _is_code(self, s: str) -> bool:
+        # Heuristik sederhana: blok berbaris atau pola RC/OUT/ERR atau baris shell
+        return ("\n" in s) or ("RC=" in s) or ("OUT=" in s) or ("ERR=" in s) or s.startswith("$ ")
+
+    def _send_text_or_code(self, chat_id: int, s: str) -> None:
+        # Kirim sebagai teks biasa kecuali terdeteksi sebagai blok code
+        if self._is_code(s):
+            self.send_message(chat_id, self._pre(s))
+        else:
+            self.send_message(chat_id, s)
+
     def handle_text(self, chat_id: int, text: str) -> None:
         # Memproses perintah teks dan memanggil Gateway sesuai pola
         t = text.strip()
@@ -96,7 +107,7 @@ class TelegramBridge:
                     snippet = log_path.read_text()
                 except Exception:
                     snippet = f"Skill '{name}' selesai. Log: {result['log']}"
-                self.send_message(chat_id, self._pre(snippet))
+                self._send_text_or_code(chat_id, snippet)
             else:
                 self.send_message(chat_id, f"Gagal: {result.get('error')}")
         elif tl.startswith("exec ") or tl.startswith("/exec "):
@@ -105,13 +116,13 @@ class TelegramBridge:
                 print(f"[telegram] exec: {cmd}")
             rc, out, err = self.gw.channels["terminal"].send({"command": cmd})
             block = f"RC={rc}\nOUT=\n{out}\nERR=\n{err}"
-            self.send_message(chat_id, self._pre(block))
+            self._send_text_or_code(chat_id, block)
         elif tl.startswith("ask ") or tl.startswith("/ask "):
             # Mode agentik: biarkan model merencanakan dan memanggil tool
             raw = t.split(" ", 1)[1] if " " in t else ""
             sess = Session(cwd=Path(self.cfg.agent.get("cwd", self.cfg.workspace_dir)), allow_shell=bool(self.cfg.agent.get("allow_shell", True)))
             def emit(s: str) -> None:
-                self.send_message(chat_id, self._pre(s))
+                self._send_text_or_code(chat_id, s)
             try:
                 if self.verbose:
                     print(f"[planner] start with prompt: {raw}")
