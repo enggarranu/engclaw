@@ -9,14 +9,14 @@
   "integrations": {
     "ollama": {
       "endpoint": "http://localhost:11434/api/generate",
-      "default_model": "qwen2:1.5b"
+      "default_model": "qwen3.5:2b"
     },
-    "telegram_token": "xxx"
+    "telegram_token": "7860306327:AAG8h9ZKN9x7Uq8Sz_jXHywQ0aSlq2J0zj4"
 
   },
   "agent": {
     "allow_shell": true,
-    "cwd": "workspace_demo",
+    "cwd": "/Users/bytedance",
     "stream": false
   }
 }
