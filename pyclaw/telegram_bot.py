@@ -115,7 +115,8 @@ class TelegramBridge:
             try:
                 if self.verbose:
                     print(f"[planner] start with prompt: {raw}")
-                plan_and_execute(raw, self.gw, sess, emit, debug=self.verbose)
+                use_stream = bool(self.cfg.agent.get("stream", True))
+                plan_and_execute(raw, self.gw, sess, emit, debug=self.verbose, use_stream=use_stream)
                 if self.verbose:
                     print(f"[planner] done")
             except Exception as e:
