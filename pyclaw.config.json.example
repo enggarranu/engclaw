@@ -1,0 +1,22 @@
+{
+  "workspace_dir": "workspace_demo",
+  "skills_dir": "workspace_demo/skills",
+  "channels": [
+    "terminal",
+    "http",
+    "ollama"
+  ],
+  "integrations": {
+    "ollama": {
+      "endpoint": "http://localhost:11434/api/generate",
+      "default_model": "qwen2:1.5b"
+    },
+    "telegram_token": "xxx"
+
+  },
+  "agent": {
+    "allow_shell": true,
+    "cwd": "workspace_demo",
+    "stream": false
+  }
+}
