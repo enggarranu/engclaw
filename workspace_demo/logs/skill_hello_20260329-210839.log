@@ -1,0 +1,3 @@
+Skill: hello
+Description: Mencetak pesan ke konsol
+{'step': 1, 'action': 'print', 'output': 'Halo dari Pyclaw!'}

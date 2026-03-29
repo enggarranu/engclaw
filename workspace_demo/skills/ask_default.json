@@ -1,0 +1,8 @@
+{
+  "name": "ask_default",
+  "description": "Gunakan default model dari config untuk tanya Ollama",
+  "steps": [
+    { "action": "ollama_prompt", "prompt": "Apa nama proyek ini dan fungsinya?" }
+  ]
+}
+

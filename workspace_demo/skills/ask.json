@@ -1,0 +1,8 @@
+{
+  "name": "ask",
+  "description": "Minta jawaban dari model Ollama",
+  "steps": [
+    { "action": "ollama_prompt", "model": "llama3", "prompt": "Tuliskan haiku tentang lobster." }
+  ]
+}
+

@@ -1,0 +1,3 @@
+Skill: fetch
+Description: Melakukan HTTP GET ke example.com
+{'step': 1, 'action': 'http_get', 'status': 200}

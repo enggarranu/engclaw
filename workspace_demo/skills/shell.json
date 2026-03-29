@@ -1,0 +1,8 @@
+{
+  "name": "shell",
+  "description": "Menjalankan perintah ls di direktori kerja",
+  "steps": [
+    { "action": "shell", "command": "ls -la" }
+  ]
+}
+

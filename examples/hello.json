@@ -1,0 +1,8 @@
+{
+  "name": "hello",
+  "description": "Mencetak pesan ke konsol",
+  "steps": [
+    { "action": "print", "message": "Halo dari Pyclaw!" }
+  ]
+}
+

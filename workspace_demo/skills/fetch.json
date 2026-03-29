@@ -1,0 +1,8 @@
+{
+  "name": "fetch",
+  "description": "Melakukan HTTP GET ke example.com",
+  "steps": [
+    { "action": "http_get", "url": "https://example.com" }
+  ]
+}
+
