@@ -1,6 +1,6 @@
-# Pyclaw
+# Engclaw (Python)
 
-Pyclaw adalah proyek contoh asisten AI pribadi sederhana berbasis Python, terinspirasi oleh OpenClaw. Fokusnya adalah arsitektur yang mudah dipahami dengan komentar di setiap blok kode agar memudahkan belajar dan adaptasi.
+Engclaw adalah proyek contoh asisten AI pribadi sederhana berbasis Python, terinspirasi oleh OpenClaw. Fokusnya adalah arsitektur yang mudah dipahami dengan komentar di setiap blok kode agar memudahkan belajar dan adaptasi.
 
 ## Fitur Utama
 - Onboarding cepat untuk menyiapkan konfigurasi dan struktur workspace.
@@ -11,7 +11,7 @@ Pyclaw adalah proyek contoh asisten AI pribadi sederhana berbasis Python, terins
 
 ## Struktur Direktori
 ```
-pyclaw/
+engclaw/  # alias ke implementasi lama (pyclaw) agar import lebih natural
   cli.py            # CLI: onboard, list-skills, run
   config.py         # Konfigurasi: baca/tulis config JSON
   workspace.py      # Workspace: memastikan folder skills/logs/data
@@ -31,17 +31,23 @@ Default tanpa dependensi eksternal — gunakan Python bawaan.
 
 - Onboard dan buat workspace:
 ```
-python -m pyclaw.cli onboard --workspace ./workspace
+python -m engclaw.cli onboard --workspace ./workspace
+```
+- Jalankan bot cepat (pendek):
+```
+python startapp.py --verbose
+# atau
+python startapp.py --token <TOKEN> --verbose
 ```
 - Lihat daftar skill:
 ```
-python -m pyclaw.cli list-skills
+python -m engclaw.cli list-skills
 ```
 - Jalankan skill:
 ```
-python -m pyclaw.cli run hello
-python -m pyclaw.cli run fetch
-python -m pyclaw.cli run shell
+python -m engclaw.cli run hello
+python -m engclaw.cli run fetch
+python -m engclaw.cli run shell
 ```
 
 Jika ingin memakai planner berbasis LangChain, instal dependensi opsional:
@@ -60,7 +66,7 @@ pip install -r requirements.txt
 ```
 - Atau berikan token via argumen:
 ```
-python -m pyclaw.cli telegram-bot --token 123456:ABCDEF...
+python -m engclaw.cli telegram-bot --token 123456:ABCDEF...
 ```
 - Perintah di chat Telegram:
   - `run <skill>` — contoh: `run hello`
@@ -72,7 +78,7 @@ python -m pyclaw.cli telegram-bot --token 123456:ABCDEF...
 - Aktifkan kanal `ollama` dengan memastikan `channels` di config berisi `"ollama"` atau jalankan Telegram bot yang akan menambahkannya otomatis.
 - Contoh skill meminta LLM: `examples/ask.json` dan jalankan:
 ```
-python -m pyclaw.cli run ask
+python -m engclaw.cli run ask
 ```
 
 #### Konfigurasi model dan endpoint di `pyclaw.config.json`
