@@ -35,7 +35,11 @@ class OllamaChannel:
 
         try:
             # Menyiapkan permintaan HTTP POST ke Ollama
-            body = json.dumps({"model": model, "prompt": prompt}).encode("utf-8")
+            body_obj = {"model": model, "prompt": prompt}
+            # Teruskan opsi model seperti temperature jika tersedia
+            if payload.get("options"):
+                body_obj["options"] = payload.get("options")
+            body = json.dumps(body_obj).encode("utf-8")
             req = Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
             with urlopen(req, timeout=30) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
@@ -61,7 +65,10 @@ class OllamaChannel:
         if not model or not prompt:
             yield {"response": "", "error": "model/prompt wajib"}
             return
-        body = json.dumps({"model": model, "prompt": prompt}).encode("utf-8")
+        body_obj = {"model": model, "prompt": prompt}
+        if payload.get("options"):
+            body_obj["options"] = payload.get("options")
+        body = json.dumps(body_obj).encode("utf-8")
         req = Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urlopen(req, timeout=30) as resp:

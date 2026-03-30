@@ -178,7 +178,41 @@ class TelegramBridge:
         self.history[chat_id] = list(data.get("history") or [])
         self.session_opts[chat_id] = dict(data.get("opts") or {})
         self.sessions[chat_id] = True
-        self._send_text_or_code(chat_id, f"Sesi '{name}' dimuat dan diaktifkan.")
+        # Kirim ringkasan konteks setelah load agar pengguna tahu persona aktif
+        persona_txt = self._persona_text(chat_id)
+        summary = [f"Sesi '{name}' dimuat dan diaktifkan."]
+        if persona_txt:
+            summary.append("Konteks:")
+            summary.append(persona_txt)
+        self._send_text_or_code(chat_id, "\n".join(summary))
+
+    def _session_info(self, chat_id: int) -> str:
+        info = ["Status sesi: aktif" if self.sessions.get(chat_id) else "Status sesi: non-aktif"]
+        opts = self.session_opts.get(chat_id, {})
+        if opts.get("name"):
+            info.append(f"Nama sesi: {opts.get('name')}")
+        ptxt = self._persona_text(chat_id)
+        if ptxt:
+            info.append("Persona:")
+            info.append(ptxt)
+        return "\n".join(info)
+
+    def _build_context(self, chat_id: int) -> str:
+        # Bangun konteks ringkas dari persona + jendela percakapan terakhir
+        opts = self.session_opts.get(chat_id, {})
+        win = int(opts.get("context_window", 8))
+        persona = self._persona_text(chat_id)
+        # Ambil hanya baris U:/A: yang single-line dan bukan blok kode RC/OUT/ERR
+        lines = []
+        for s in self.history.get(chat_id, [])[-(win*2):]:
+            t = s.strip()
+            if t.startswith("U:") or t.startswith("A:"):
+                if ("\n" not in t) and ("RC=" not in t) and ("OUT=" not in t) and ("ERR=" not in t):
+                    lines.append(t)
+        ctx = "\n".join(lines)
+        if persona and ctx:
+            return persona + "\n" + ctx
+        return persona or ctx
 
     def _list_sessions(self, chat_id: int) -> None:
         sessions_dir = self.cfg.workspace_dir / "sessions"
@@ -251,6 +285,9 @@ class TelegramBridge:
             if tail.startswith("list"):
                 self._list_sessions(chat_id)
                 return
+            if tail.startswith("info"):
+                self._send_text_or_code(chat_id, self._session_info(chat_id))
+                return
             if tail.startswith("persona"):
                 # Set persona dari bentuk: key=value atau teks bebas
                 content = raw_tail[7:].strip()  # setelah 'persona'
@@ -290,21 +327,34 @@ class TelegramBridge:
         # Natural chat (sesi aktif)
         if self.sessions.get(chat_id, False):
             raw = t
+            # Simpan input pengguna untuk konteks
+            self.history.setdefault(chat_id, []).append(f"U: {t}")
             # Ambil opsi sesi jika ada; fallback ke config
             opts = self.session_opts.get(chat_id, {})
             cwd = Path(opts.get("cwd") or self.cfg.agent.get("cwd", self.cfg.workspace_dir))
             allow_shell = bool(opts.get("allow_shell", self.cfg.agent.get("allow_shell", True)))
             sess = Session(cwd=cwd, allow_shell=allow_shell)
             def emit(s: str) -> None:
-                self.history.setdefault(chat_id, []).append(s)
+                self.history.setdefault(chat_id, []).append(f"A: {s}")
                 self._send_text_or_code(chat_id, s)
             use_stream = bool(self.cfg.agent.get("stream", True))
-            # Gabungkan memory dari riwayat agar model punya konteks
-            # Untuk kestabilan planner, hanya kirim persona sebagai memory
-            persona_text = self._persona_text(chat_id)
-            memory_text = persona_text or None
+            # Persona + konteks ringkas
+            persona_text = self._build_context(chat_id)
+            planner_type = str(self.cfg.agent.get("planner", "ndjson")).lower()
+            temperature = float(self.cfg.agent.get("temperature", 0.2))
             try:
-                plan_and_execute(raw, self.gw, sess, emit, debug=self.verbose, use_stream=use_stream, memory=memory_text)
+                if planner_type == "langchain":
+                    from .agent.langchain_planner import plan_and_execute_lc
+                    model = (self.cfg.integrations.get("ollama") or {}).get("default_model", "llama3")
+                    plan_and_execute_lc(raw, self.gw, sess, emit, model=model, system_text=persona_text or None, temperature=temperature)
+                else:
+                    plan_and_execute(
+                        raw, self.gw, sess, emit,
+                        debug=self.verbose,
+                        use_stream=use_stream,
+                        memory=persona_text or None,
+                        model_options={"temperature": temperature}
+                    )
             except Exception as e:
                 self._send_text_or_code(chat_id, f"Error: {e}")
             return

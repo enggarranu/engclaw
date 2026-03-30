@@ -9,7 +9,7 @@
   "integrations": {
     "ollama": {
       "endpoint": "http://localhost:11434/api/generate",
-      "default_model": "qwen2:1.5b"
+      "default_model": "qwen3.5:cloud"
     },
     "telegram_token": "xxx"
 

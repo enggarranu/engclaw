@@ -27,7 +27,7 @@ examples/
 ```
 
 ## Instalasi & Jalankan
-Tanpa dependensi eksternal — gunakan Python bawaan.
+Default tanpa dependensi eksternal — gunakan Python bawaan.
 
 - Onboard dan buat workspace:
 ```
@@ -42,6 +42,11 @@ python -m pyclaw.cli list-skills
 python -m pyclaw.cli run hello
 python -m pyclaw.cli run fetch
 python -m pyclaw.cli run shell
+```
+
+Jika ingin memakai planner berbasis LangChain, instal dependensi opsional:
+```
+pip install -r requirements.txt
 ```
 
 ### Integrasi Telegram
@@ -83,12 +88,18 @@ Anda bisa mengatur model default dan endpoint Ollama agar fleksibel:
   },
   "agent": {
     "allow_shell": true,
-    "cwd": "./"
+    "cwd": "./",
+    "stream": false,
+    "planner": "langchain",
+    "temperature": 0.2
   }
 }
 ```
 - `agent.allow_shell`: izinkan planner mengeksekusi perintah shell dari model.
 - `agent.cwd`: direktori kerja default untuk perintah shell.
+- `agent.stream`: aktifkan streaming untuk planner NDJSON (non-stream disarankan untuk debugging).
+- `agent.planner`: pilih `ndjson` (internal) atau `langchain` (opsional, butuh dependensi).
+- `agent.temperature`: atur kreativitas model (0.0 deterministik, lebih tinggi lebih kreatif).
 
 ### Mode Agentik & Streaming
 - Planner: `pyclaw/agent/planner.py` menunggu NDJSON dari model: `{ "say": ... }` atau `{ "tool": "shell", "command": ... }` atau `{ "tool": "skill", "name": ... }`.
@@ -96,6 +107,21 @@ Anda bisa mengatur model default dan endpoint Ollama agar fleksibel:
 - Telegram bridge akan mengirim hasil secara bertahap dalam blok `<pre>` agar rapi dan mudah dibaca.
 - Skill tanpa `model` akan memakai `default_model` di atas (contoh: `examples/ask_default.json`).
 - Di Telegram, Anda bisa override per pesan: `ask llama3: tulis haiku` atau cukup `ask ...` untuk pakai default.
+
+### Planner LangChain (opsional)
+- Aktifkan dengan menambah konfigurasi berikut di `pyclaw.config.json`:
+```
+{
+  "agent": {
+    "planner": "langchain",
+    "allow_shell": true,
+    "cwd": "./",
+    "stream": false
+  }
+}
+```
+- Instal paket: `pip install -r requirements.txt`.
+- Tools yang tersedia di LangChain planner: `shell`, `skill`, `file_write`, `file_append`, `file_read`, `file_list`.
 
 ## Catatan
 - Semua kode diberi komentar untuk menjelaskan fungsi tiap blok.
