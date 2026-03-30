@@ -214,6 +214,21 @@ class TelegramBridge:
             return persona + "\n" + ctx
         return persona or ctx
 
+    def _help_text(self) -> str:
+        return (
+            "Perintah tersedia:\n"
+            "- /ask start [nama] — mulai sesi (opsional beri nama)\n"
+            "- /ask stop — hentikan sesi aktif\n"
+            "- /ask save [nama] — simpan sesi ke workspace_dir/sessions\n"
+            "- /ask load <nama> — muat sesi tersimpan dan aktifkan\n"
+            "- /ask list — daftar sesi tersimpan\n"
+            "- /ask info — ringkasan status & persona sesi\n"
+            "- /ask persona key=value … | teks — set identitas (name, alias, role, style, traits, system)\n"
+            "- run <skill> — jalankan skill JSON di workspace\n"
+            "- exec <command> — jalankan perintah shell (jika diizinkan)\n\n"
+            "Mode chat natural: setelah sesi aktif, ketik pesan biasa. Agen akan merencanakan, dapat memakai tool seperti shell/skill dan operasi file dalam workspace."
+        )
+
     def _list_sessions(self, chat_id: int) -> None:
         sessions_dir = self.cfg.workspace_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +282,9 @@ class TelegramBridge:
                 return
             if tail.startswith("stop") or tail.startswith("end"):
                 self._stop_session(chat_id)
+                return
+            if tail in ("help", "?", "h"):
+                self._send_text_or_code(chat_id, self._help_text())
                 return
             if tail.startswith("save"):
                 parts = tail.split()
