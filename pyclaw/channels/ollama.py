@@ -12,7 +12,7 @@ Mengembalikan dict {"ok": bool, "response": str, "error": str|None}
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, List
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -35,10 +35,14 @@ class OllamaChannel:
 
         try:
             # Menyiapkan permintaan HTTP POST ke Ollama
-            body_obj = {"model": model, "prompt": prompt}
+            body_obj: Dict[str, Any] = {"model": model, "prompt": prompt}
             # Teruskan opsi model seperti temperature jika tersedia
             if payload.get("options"):
                 body_obj["options"] = payload.get("options")
+            # Dukungan visi: daftar base64 image strings
+            images: List[str] | None = payload.get("images")
+            if images:
+                body_obj["images"] = images
             body = json.dumps(body_obj).encode("utf-8")
             req = Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
             with urlopen(req, timeout=30) as resp:
@@ -65,9 +69,12 @@ class OllamaChannel:
         if not model or not prompt:
             yield {"response": "", "error": "model/prompt wajib"}
             return
-        body_obj = {"model": model, "prompt": prompt}
+        body_obj: Dict[str, Any] = {"model": model, "prompt": prompt}
         if payload.get("options"):
             body_obj["options"] = payload.get("options")
+        images: List[str] | None = payload.get("images")
+        if images:
+            body_obj["images"] = images
         body = json.dumps(body_obj).encode("utf-8")
         req = Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
         try:

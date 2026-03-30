@@ -90,6 +90,22 @@ class TelegramBridge:
             print(f"[telegram] updates: {len(data.get('result', []))} ok={data.get('ok', True)}")
         return data.get("result", [])
 
+    def _get_file_path(self, file_id: str) -> str | None:
+        try:
+            url = self.api_url("getFile") + f"?file_id={file_id}"
+            with urlopen(url, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok") and data.get("result") and data["result"].get("file_path"):
+                return data["result"]["file_path"]
+        except Exception:
+            return None
+        return None
+
+    def _download_file_bytes(self, file_path: str) -> bytes:
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        with urlopen(url, timeout=60) as resp:
+            return resp.read()
+
     def send_message(self, chat_id: int, text: str) -> None:
         # Mengirim pesan balik ke chat dengan mode HTML agar bisa <pre> blok monospaced
         body = json.dumps({
@@ -191,6 +207,10 @@ class TelegramBridge:
         opts = self.session_opts.get(chat_id, {})
         if opts.get("name"):
             info.append(f"Nama sesi: {opts.get('name')}")
+        if opts.get("model"):
+            info.append(f"Model teks: {opts.get('model')}")
+        if opts.get("vision_model"):
+            info.append(f"Model visi: {opts.get('vision_model')}")
         ptxt = self._persona_text(chat_id)
         if ptxt:
             info.append("Persona:")
@@ -223,6 +243,11 @@ class TelegramBridge:
             "- /ask load <nama> — muat sesi tersimpan dan aktifkan\n"
             "- /ask list — daftar sesi tersimpan\n"
             "- /ask info — ringkasan status & persona sesi\n"
+            "- /ask set model=<model> — atur model teks per sesi\n"
+            "- /ask set vision=<model> — atur model visi per sesi\n"
+            "- /ask set cwd=<path> — atur working directory per sesi\n"
+            "- /ask set window=<n> — atur jendela konteks percakapan\n"
+            "- /ask set allow_shell=<true|false> — izinkan/larang perintah shell\n"
             "- /ask persona key=value … | teks — set identitas (name, alias, role, style, traits, system)\n"
             "- run <skill> — jalankan skill JSON di workspace\n"
             "- exec <command> — jalankan perintah shell (jika diizinkan)\n\n"
@@ -260,6 +285,21 @@ class TelegramBridge:
                     text = msg.get("text")
                     if chat_id is not None and text:
                         self.handle_text2(chat_id, text)
+                        continue
+                    # Tangani gambar (photo/document image)
+                    photo = (msg.get("photo") or [])
+                    document = msg.get("document") or {}
+                    caption = msg.get("caption") or ""
+                    handled_image = False
+                    if photo:
+                        # Ambil ukuran terbesar
+                        file_id = sorted(photo, key=lambda x: x.get("file_size", 0))[-1].get("file_id")
+                        handled_image = self.handle_image(chat_id, file_id, caption)
+                    elif document and str(document.get("mime_type", "")).startswith("image/"):
+                        file_id = document.get("file_id")
+                        handled_image = self.handle_image(chat_id, file_id, caption)
+                    if handled_image:
+                        continue
                     else:
                         if self.verbose:
                             print("[telegram] skip update: no text message")
@@ -285,6 +325,32 @@ class TelegramBridge:
                 return
             if tail in ("help", "?", "h"):
                 self._send_text_or_code(chat_id, self._help_text())
+                return
+            if tail.startswith("set"):
+                # /ask set key=value ...  (mendukung model, vision, cwd, window, allow_shell)
+                content = raw_tail[3:].strip()
+                kvs = list(re.finditer(r"([a-zA-Z_]+)\s*=\s*(\"([^\"]*)\"|'([^']*)'|[^\s]+)", content))
+                if not kvs:
+                    self._send_text_or_code(chat_id, "Format: /ask set vision=<model> | model=<model> | cwd=<path> | window=<n> | allow_shell=<true|false>")
+                    return
+                dst = self.session_opts.setdefault(chat_id, {})
+                for m2 in kvs:
+                    key = m2.group(1)
+                    val = m2.group(3) or m2.group(4) or m2.group(2)
+                    if key in ("vision", "vision_model"):
+                        dst["vision_model"] = val
+                    elif key in ("model",):
+                        dst["model"] = val
+                    elif key == "cwd":
+                        dst["cwd"] = val
+                    elif key in ("window", "context_window"):
+                        try:
+                            dst["context_window"] = int(val)
+                        except Exception:
+                            pass
+                    elif key == "allow_shell":
+                        dst["allow_shell"] = str(val).lower() in ("1", "true", "yes", "y")
+                self._send_text_or_code(chat_id, "Setelan sesi diperbarui.")
                 return
             if tail.startswith("save"):
                 parts = tail.split()
@@ -360,12 +426,18 @@ class TelegramBridge:
             persona_text = self._build_context(chat_id)
             planner_type = str(self.cfg.agent.get("planner", "ndjson")).lower()
             temperature = float(self.cfg.agent.get("temperature", 0.2))
+            # Tentukan model teks untuk logging (mengikuti default NDJSON)
+            default_text_model = (self.cfg.integrations.get("ollama") or {}).get("default_model", "llama3")
             try:
                 if planner_type == "langchain":
                     from .agent.langchain_planner import plan_and_execute_lc
-                    model = (self.cfg.integrations.get("ollama") or {}).get("default_model", "llama3")
+                    model = default_text_model
+                    if self.verbose:
+                        print(f"[planner] text via LangChain model={model} temp={temperature} stream={use_stream}")
                     plan_and_execute_lc(raw, self.gw, sess, emit, model=model, system_text=persona_text or None, temperature=temperature)
                 else:
+                    if self.verbose:
+                        print(f"[planner] text via NDJSON model={default_text_model} temp={temperature} stream={use_stream}")
                     plan_and_execute(
                         raw, self.gw, sess, emit,
                         debug=self.verbose,
@@ -378,6 +450,39 @@ class TelegramBridge:
             return
         # Default bantuan
         self._send_text_or_code(chat_id, "Gunakan /ask start untuk memulai sesi percakapan.")
+
+    def handle_image(self, chat_id: int, file_id: str | None, caption: str | None) -> bool:
+        if file_id is None:
+            return False
+        fp = self._get_file_path(file_id)
+        if not fp:
+            return False
+        try:
+            content = self._download_file_bytes(fp)
+        except Exception as e:
+            self._send_text_or_code(chat_id, f"Error unduh gambar: {e}")
+            return True
+        import base64
+        b64 = base64.b64encode(content).decode("utf-8")
+        prompt = caption or "Jelaskan isi gambar ini secara ringkas."
+        # Pastikan kanal ollama ada
+        if "ollama" not in self.gw.channels:
+            self._send_text_or_code(chat_id, "Kanal 'ollama' belum aktif untuk pemrosesan gambar.")
+            return True
+        # Pilih model visi: prioritas sesi → config.ollama.vision_model → fallback llava
+        sess_vm = (self.session_opts.get(chat_id, {}) or {}).get("vision_model")
+        cfg_vm = (self.cfg.integrations.get("ollama") or {}).get("vision_model")
+        model = sess_vm or cfg_vm or "llava:latest"
+        if self.verbose:
+            src = "session" if sess_vm else ("config" if cfg_vm else "fallback")
+            print(f"[planner] vision image model={model} source={src} caption_len={len(prompt)}")
+        opts = {"temperature": float(self.cfg.agent.get("temperature", 0.2))}
+        resp = self.gw.channels["ollama"].send({"model": model, "prompt": prompt, "images": [b64], "options": opts})
+        if resp.get("ok"):
+            self._send_text_or_code(chat_id, resp.get("response", ""))
+        else:
+            self._send_text_or_code(chat_id, f"Error: {resp.get('error')}")
+        return True
 
 
 def run_bot_via_cli(token_arg: str | None, verbose: bool = False) -> int:

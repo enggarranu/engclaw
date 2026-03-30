@@ -39,6 +39,11 @@ python startapp.py --verbose
 # atau
 python startapp.py --token <TOKEN> --verbose
 ```
+- Alternatif: jalankan sebagai modul ringkas:
+```
+python -m engclaw telegram-bot --verbose
+# setara dengan: python -m engclaw cli telegram-bot --verbose
+```
 - Lihat daftar skill:
 ```
 python -m engclaw.cli list-skills
@@ -72,6 +77,10 @@ python -m engclaw.cli telegram-bot --token 123456:ABCDEF...
   - `run <skill>` — contoh: `run hello`
   - `exec <command>` — contoh: `exec ls -la`
   - `ask <prompt>` — mode agentik: model merencanakan, bisa memanggil shell/skill, hasil di-stream rapi.
+  - Atur model per sesi:
+    - ` /ask set model=<model>` — atur model teks hanya untuk sesi aktif
+    - ` /ask set vision=<model>` — atur model visi (untuk gambar) hanya untuk sesi aktif
+    - contoh: `/ask set model=qwen2:1.5b vision=qwen3-vl:2b`
 
 ### Integrasi Ollama
 - Pastikan Ollama berjalan lokal (`ollama serve`) dan model tersedia (mis. `ollama pull llama3`).
@@ -89,7 +98,8 @@ Anda bisa mengatur model default dan endpoint Ollama agar fleksibel:
   "integrations": {
     "ollama": {
       "endpoint": "http://localhost:11434/api/generate",
-      "default_model": "qwen2:1.5b"
+      "default_model": "qwen2:1.5b",
+      "vision_model": "llava:latest"
     }
   },
   "agent": {
@@ -106,6 +116,10 @@ Anda bisa mengatur model default dan endpoint Ollama agar fleksibel:
 - `agent.stream`: aktifkan streaming untuk planner NDJSON (non-stream disarankan untuk debugging).
 - `agent.planner`: pilih `ndjson` (internal) atau `langchain` (opsional, butuh dependensi).
 - `agent.temperature`: atur kreativitas model (0.0 deterministik, lebih tinggi lebih kreatif).
+
+Vision:
+- Kirim gambar di Telegram dengan caption; bot akan memakai model visi.
+- Atur model visi global di `integrations.ollama.vision_model`, atau per sesi dengan `/ask set vision=<model>`.
 
 ### Mode Agentik & Streaming
 - Planner: `pyclaw/agent/planner.py` menunggu NDJSON dari model: `{ "say": ... }` atau `{ "tool": "shell", "command": ... }` atau `{ "tool": "skill", "name": ... }`.

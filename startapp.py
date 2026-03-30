@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 from engclaw.telegram_bot import run_bot_via_cli
 
