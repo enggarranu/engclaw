@@ -39,7 +39,7 @@ class Config:
         # Menyimpan info integrasi eksternal (mis. token Telegram)
         self.integrations: Dict[str, Any] = integrations or {}
         # Pengaturan agent (mis. izin shell, cwd)
-        self.agent: Dict[str, Any] = agent or {"allow_shell": True, "cwd": str(workspace_dir), "stream": True, "planner": "ndjson", "temperature": 0.2}
+        self.agent: Dict[str, Any] = agent or {"allow_shell": True, "cwd": str(workspace_dir), "stream": True, "planner": "ndjson", "temperature": 0.2, "auto_save_seconds": 60}
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

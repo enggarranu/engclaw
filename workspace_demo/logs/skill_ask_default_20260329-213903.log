@@ -1,3 +1,0 @@
-Skill: ask_default
-Description: Gunakan default model dari config untuk tanya Ollama
-{'step': 1, 'action': 'ollama_prompt', 'ok': False, 'response': '', 'error': 'HTTP Error 404: Not Found'}

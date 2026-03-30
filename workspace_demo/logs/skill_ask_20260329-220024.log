@@ -1,3 +1,0 @@
-Skill: ask
-Description: Minta jawaban dari model Ollama
-{'step': 1, 'action': 'ollama_prompt', 'ok': False, 'response': '', 'error': 'HTTP Error 404: Not Found'}

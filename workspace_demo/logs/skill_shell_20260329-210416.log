@@ -1,3 +1,0 @@
-Skill: shell
-Description: Menjalankan perintah ls di direktori kerja
-{'step': 1, 'action': 'shell', 'returncode': 0, 'stdout': 'total 16\ndrwxr-xr-x@  7 bytedance  staff   224 Mar 29 21:03 .\ndrwxr-xr-x  18 bytedance  staff   576 Mar 29 20:53 ..\n-rw-r--r--@  1 bytedance  staff  1725 Mar 29 21:01 README.md\ndrwxr-xr-x@  5 bytedance  staff   160 Mar 29 21:01 examples\ndrwxr-xr-x@ 10 bytedance  staff   320 Mar 29 21:03 pyclaw\n-rw-r--r--@  1 bytedance  staff   128 Mar 29 21:03 pyclaw.config.json\ndrwxr-xr-x@  5 bytedance  staff   160 Mar 29 21:03 workspace_demo\n', 'stderr': ''}

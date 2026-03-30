@@ -43,6 +43,9 @@ class TelegramBridge:
         self.sessions: dict[int, bool] = {}
         self.history: dict[int, list[str]] = {}
         self.session_opts: dict[int, dict[str, Any]] = {}
+        # Auto-save sesi
+        self._auto_save_seconds: int = int(self.cfg.agent.get("auto_save_seconds", 60))
+        self._last_saved: dict[int, float] = {}
 
     def _persona_text(self, chat_id: int) -> str:
         # Membentuk teks persona untuk dijadikan memory sistem
@@ -130,8 +133,16 @@ class TelegramBridge:
         return f"<pre>{self._escape_html(s)}</pre>"
 
     def _is_code(self, s: str) -> bool:
-        # Heuristik sederhana: blok berbaris atau pola RC/OUT/ERR atau baris shell
-        return ("\n" in s) or ("RC=" in s) or ("OUT=" in s) or ("ERR=" in s) or s.startswith("$ ")
+        # Heuristik: anggap code hanya jika ada pola khas kode/log, bukan sekadar teks multi-baris
+        if ("RC=" in s) or ("OUT=" in s) or ("ERR=" in s) or ("```" in s):
+            return True
+        # Cek beberapa baris awal untuk tanda khas shell/kode
+        check_prefixes = ("$ ", "import ", "from ", "def ", "class ", "SELECT ", "INSERT ", "UPDATE ", "CREATE ", "#!/")
+        for line in s.splitlines()[:5]:
+            t = line.lstrip()
+            if t.startswith(check_prefixes) or t.endswith(";"):
+                return True
+        return False
 
     def _send_text_or_code(self, chat_id: int, s: str) -> None:
         # Kirim sebagai teks biasa kecuali terdeteksi sebagai blok code
@@ -143,10 +154,19 @@ class TelegramBridge:
     def _start_session(self, chat_id: int, name: Optional[str] = None) -> None:
         self.sessions[chat_id] = True
         if name:
-            self.session_opts.setdefault(chat_id, {})["name"] = name
+            opts = self.session_opts.setdefault(chat_id, {})
+            opts["name"] = name
+            # Prefill persona name jika belum ada
+            persona = opts.get("persona") or {}
+            if not persona.get("name"):
+                persona["name"] = name
+            opts["persona"] = persona
         if self.verbose:
             print(f"[session] start chat={chat_id} name={name or ''}")
-        self._send_text_or_code(chat_id, "Sesi dimulai. Kirim pesan biasa untuk bertanya.")
+        if self._persona_missing(chat_id):
+            self._start_persona_wizard(chat_id)
+        else:
+            self._send_text_or_code(chat_id, "Sesi dimulai. Kirim pesan biasa untuk bertanya.")
 
     def _stop_session(self, chat_id: int) -> None:
         self.sessions[chat_id] = False
@@ -174,15 +194,35 @@ class TelegramBridge:
     def _save_session_named(self, chat_id: int, name: str) -> None:
         sessions_dir = self.cfg.workspace_dir / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
+        # Simpan juga nama ke opts agar ketika load, sesi mengetahui namanya
+        opts = dict(self.session_opts.get(chat_id, {}))
+        opts["name"] = name
         data = {
             "name": name,
             "chat_id": chat_id,
             "history": self.history.get(chat_id, []),
-            "opts": self.session_opts.get(chat_id, {}),
+            "opts": opts,
         }
         path = sessions_dir / f"{name}.json"
         path.write_text(json.dumps(data, indent=2))
         self._send_text_or_code(chat_id, f"Sesi disimpan: {path}")
+
+    def _write_session_named(self, chat_id: int, name: str) -> None:
+        """
+        Menulis sesi ke berkas TANPA mengirim pesan chat (dipakai autosave).
+        """
+        sessions_dir = self.cfg.workspace_dir / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        opts = dict(self.session_opts.get(chat_id, {}))
+        opts["name"] = name
+        data = {
+            "name": name,
+            "chat_id": chat_id,
+            "history": self.history.get(chat_id, []),
+            "opts": opts,
+        }
+        path = sessions_dir / f"{name}.json"
+        path.write_text(json.dumps(data, indent=2))
 
     def _load_session_named(self, chat_id: int, name: str) -> None:
         sessions_dir = self.cfg.workspace_dir / "sessions"
@@ -193,6 +233,8 @@ class TelegramBridge:
         data = json.loads(path.read_text())
         self.history[chat_id] = list(data.get("history") or [])
         self.session_opts[chat_id] = dict(data.get("opts") or {})
+        # Pastikan nama terisi di session_opts untuk autosave
+        self.session_opts[chat_id]["name"] = data.get("name", name)
         self.sessions[chat_id] = True
         # Kirim ringkasan konteks setelah load agar pengguna tahu persona aktif
         persona_txt = self._persona_text(chat_id)
@@ -234,6 +276,62 @@ class TelegramBridge:
             return persona + "\n" + ctx
         return persona or ctx
 
+    def _persona_missing(self, chat_id: int) -> bool:
+        opts = self.session_opts.get(chat_id, {})
+        p = opts.get("persona") or {}
+        # Wajib: name, alias (panggilan user), role
+        return not (p.get("name") and p.get("alias") and p.get("role"))
+
+    def _persona_prompt(self, chat_id: int) -> str:
+        name_hint = self.session_opts.get(chat_id, {}).get("name") or "<nama_agen>"
+        return (
+            "Sesi dimulai. Lengkapi persona terlebih dahulu (WAJIB).\n"
+            "Isi minimal: name, alias (panggilan Anda), role. Contoh:\n"
+            f"/ask persona name={name_hint} alias=maseng role=\"asisten pribadi\" style=\"santai\" traits=\"sopan, tegas\"\n"
+            "Setelah terisi, kirim pesan biasa untuk mulai chat."
+        )
+
+    def _wizard_active(self, chat_id: int) -> bool:
+        return bool(self.session_opts.get(chat_id, {}).get("persona_wizard"))
+
+    def _wizard_next_field(self, chat_id: int) -> Optional[str]:
+        required = ["name", "alias", "role", "style", "traits", "system"]
+        p = (self.session_opts.get(chat_id, {}) or {}).get("persona") or {}
+        for key in required:
+            if not p.get(key):
+                return key
+        return None
+
+    def _start_persona_wizard(self, chat_id: int) -> None:
+        self.session_opts.setdefault(chat_id, {})["persona_wizard"] = {"step": self._wizard_next_field(chat_id) or "name"}
+        self._send_text_or_code(chat_id, self._wizard_prompt(chat_id))
+
+    def _wizard_prompt(self, chat_id: int) -> str:
+        step = (self.session_opts.get(chat_id, {}).get("persona_wizard") or {}).get("step") or "name"
+        prompts = {
+            "name": "Nama agen? contoh: jon",
+            "alias": "Saya memanggil Anda sebagai? contoh: maseng",
+            "role": "Peran agen? contoh: asisten pribadi",
+            "style": "Gaya jawaban (opsional)? contoh: santai — kirim '-' untuk lewati",
+            "traits": "Sifat (opsional)? contoh: sopan, tegas — kirim '-' untuk lewati",
+            "system": "Instruksi sistem tambahan (opsional)? — kirim '-' untuk lewati",
+        }
+        return prompts.get(step, "Lengkapi persona.")
+
+    def _wizard_handle_answer(self, chat_id: int, text: str) -> None:
+        step = (self.session_opts.get(chat_id, {}).get("persona_wizard") or {}).get("step") or "name"
+        val = text.strip()
+        if val != "-":
+            p = (self.session_opts.setdefault(chat_id, {}).setdefault("persona", {}))
+            p[step] = val
+        nxt = self._wizard_next_field(chat_id)
+        if nxt is None:
+            self.session_opts.get(chat_id, {}).pop("persona_wizard", None)
+            self._send_text_or_code(chat_id, "Persona lengkap. Silakan mulai percakapan.")
+        else:
+            self.session_opts.get(chat_id, {}).setdefault("persona_wizard", {})["step"] = nxt
+            self._send_text_or_code(chat_id, self._wizard_prompt(chat_id))
+
     def _help_text(self) -> str:
         return (
             "Perintah tersedia:\n"
@@ -248,11 +346,44 @@ class TelegramBridge:
             "- /ask set cwd=<path> — atur working directory per sesi\n"
             "- /ask set window=<n> — atur jendela konteks percakapan\n"
             "- /ask set allow_shell=<true|false> — izinkan/larang perintah shell\n"
+            "- /ask models — daftar model Ollama terpasang\n"
             "- /ask persona key=value … | teks — set identitas (name, alias, role, style, traits, system)\n"
             "- run <skill> — jalankan skill JSON di workspace\n"
             "- exec <command> — jalankan perintah shell (jika diizinkan)\n\n"
             "Mode chat natural: setelah sesi aktif, ketik pesan biasa. Agen akan merencanakan, dapat memakai tool seperti shell/skill dan operasi file dalam workspace."
         )
+
+    def _ollama_base(self) -> str:
+        ep = (self.cfg.integrations.get("ollama") or {}).get("endpoint", "http://localhost:11434/api/generate")
+        if "/api/" in ep:
+            return ep.split("/api/", 1)[0]
+        return ep.rstrip("/")
+
+    def _list_ollama_models(self) -> str:
+        import datetime
+        url = self._ollama_base() + "/api/tags"
+        try:
+            if self.verbose:
+                print(f"[ollama] GET {url}")
+            with urlopen(url, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("models") or []
+            if not models:
+                return "Tidak ada model Ollama terdeteksi."
+            lines = ["NAME\tSIZE\tMODIFIED"]
+            for m in models:
+                name = m.get("name", "-")
+                size = m.get("size") or m.get("size_bytes") or "-"
+                if isinstance(size, int):
+                    gb = size / (1024**3)
+                    size_s = f"{gb:.1f} GB" if gb >= 1 else f"{size/1024**2:.0f} MB"
+                else:
+                    size_s = str(size)
+                mod = m.get("modified") or m.get("modified_at") or "-"
+                lines.append(f"{name}\t{size_s}\t{mod}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error mengambil daftar model: {e}"
 
     def _list_sessions(self, chat_id: int) -> None:
         sessions_dir = self.cfg.workspace_dir / "sessions"
@@ -269,6 +400,37 @@ class TelegramBridge:
 
     def loop(self) -> None:
         # Loop utama: ambil update dan proses pesan
+        import threading
+        import time as _time
+        # Jalankan thread autosave
+        if self._auto_save_seconds and self._auto_save_seconds > 0:
+            def _autosave_loop():
+                while True:
+                    try:
+                        now = _time.time()
+                        for chat_id, active in list(self.sessions.items()):
+                            if not active:
+                                continue
+                            secs = int(self.session_opts.get(chat_id, {}).get("auto_save_seconds", self._auto_save_seconds))
+                            if secs <= 0:
+                                continue
+                            last = self._last_saved.get(chat_id, 0)
+                            if now - last >= secs:
+                                # Simpan ke nama sesi jika tersedia; jika belum, pakai default 'jon'
+                                name = self.session_opts.get(chat_id, {}).get("name") or "jon"
+                                try:
+                                    self._write_session_named(chat_id, name)
+                                    self._last_saved[chat_id] = now
+                                    if self.verbose:
+                                        print(f"[autosave] chat={chat_id} name={name}")
+                                except Exception as e:
+                                    if self.verbose:
+                                        print(f"[autosave] error: {e}")
+                    except Exception:
+                        pass
+                    _time.sleep(max(5, int(self._auto_save_seconds)))
+            threading.Thread(target=_autosave_loop, daemon=True).start()
+
         while True:
             try:
                 updates = self.get_updates()
@@ -317,7 +479,8 @@ class TelegramBridge:
             tail = raw_tail.lower()
             if tail == "" or tail.startswith("start"):
                 parts = tail.split()
-                name = parts[1] if len(parts) >= 2 else None
+                # Default nama sesi ke 'jon' jika tidak diberikan
+                name = parts[1] if len(parts) >= 2 else "jon"
                 self._start_session(chat_id, name)
                 return
             if tail.startswith("stop") or tail.startswith("end"):
@@ -326,12 +489,16 @@ class TelegramBridge:
             if tail in ("help", "?", "h"):
                 self._send_text_or_code(chat_id, self._help_text())
                 return
+            if tail.startswith("models"):
+                txt = self._list_ollama_models()
+                self._send_text_or_code(chat_id, txt)
+                return
             if tail.startswith("set"):
                 # /ask set key=value ...  (mendukung model, vision, cwd, window, allow_shell)
                 content = raw_tail[3:].strip()
                 kvs = list(re.finditer(r"([a-zA-Z_]+)\s*=\s*(\"([^\"]*)\"|'([^']*)'|[^\s]+)", content))
                 if not kvs:
-                    self._send_text_or_code(chat_id, "Format: /ask set vision=<model> | model=<model> | cwd=<path> | window=<n> | allow_shell=<true|false>")
+                    self._send_text_or_code(chat_id, "Format: /ask set vision=<model> | model=<model> | cwd=<path> | window=<n> | allow_shell=<true|false> | autosave=<seconds>")
                     return
                 dst = self.session_opts.setdefault(chat_id, {})
                 for m2 in kvs:
@@ -350,6 +517,11 @@ class TelegramBridge:
                             pass
                     elif key == "allow_shell":
                         dst["allow_shell"] = str(val).lower() in ("1", "true", "yes", "y")
+                    elif key in ("autosave", "auto_save_seconds"):
+                        try:
+                            dst["auto_save_seconds"] = int(val)
+                        except Exception:
+                            pass
                 self._send_text_or_code(chat_id, "Setelan sesi diperbarui.")
                 return
             if tail.startswith("save"):
@@ -385,8 +557,23 @@ class TelegramBridge:
                 elif content:
                     persona["system"] = content
                 self.session_opts.setdefault(chat_id, {})["persona"] = persona
-                self._send_text_or_code(chat_id, "Persona diperbarui.")
+                if self._persona_missing(chat_id):
+                    missing = []
+                    p = self.session_opts.get(chat_id, {}).get("persona") or {}
+                    if not p.get("name"): missing.append("name")
+                    if not p.get("alias"): missing.append("alias")
+                    if not p.get("role"): missing.append("role")
+                    self._send_text_or_code(chat_id, "Persona diperbarui sebagian. Masih kurang: " + ", ".join(missing))
+                else:
+                    self._send_text_or_code(chat_id, "Persona lengkap. Silakan mulai percakapan.")
                 return
+        # Alias sederhana untuk memulai: /start
+        if tl.strip() in ("/start", "start"):
+            # Gunakan 'jon' sebagai nama default saat memulai sesi cepat
+            default_name = self.session_opts.get(chat_id, {}).get("name") or "jon"
+            self._start_session(chat_id, default_name)
+            return
+
         # Aksi eksplisit: run
         if tl.startswith("run ") or tl.startswith("/run "):
             name = t.split(" ", 1)[1].strip() if " " in t else ""
@@ -413,6 +600,13 @@ class TelegramBridge:
             raw = t
             # Simpan input pengguna untuk konteks
             self.history.setdefault(chat_id, []).append(f"U: {t}")
+            if self._wizard_active(chat_id):
+                self._wizard_handle_answer(chat_id, t)
+                return
+            # Wajib persona lengkap sebelum menjalankan planner
+            if self._persona_missing(chat_id):
+                self._start_persona_wizard(chat_id)
+                return
             # Ambil opsi sesi jika ada; fallback ke config
             opts = self.session_opts.get(chat_id, {})
             cwd = Path(opts.get("cwd") or self.cfg.agent.get("cwd", self.cfg.workspace_dir))
@@ -448,8 +642,9 @@ class TelegramBridge:
             except Exception as e:
                 self._send_text_or_code(chat_id, f"Error: {e}")
             return
-        # Default bantuan
-        self._send_text_or_code(chat_id, "Gunakan /ask start untuk memulai sesi percakapan.")
+        # Jika belum ada sesi, mulai otomatis dengan nama default 'jon'
+        self._start_session(chat_id, "jon")
+        return
 
     def handle_image(self, chat_id: int, file_id: str | None, caption: str | None) -> bool:
         if file_id is None:

@@ -81,6 +81,9 @@ python -m engclaw.cli telegram-bot --token 123456:ABCDEF...
     - ` /ask set model=<model>` — atur model teks hanya untuk sesi aktif
     - ` /ask set vision=<model>` — atur model visi (untuk gambar) hanya untuk sesi aktif
     - contoh: `/ask set model=qwen2:1.5b vision=qwen3-vl:2b`
+  - Auto-save sesi:
+    - Aktif default tiap 60 detik (konfigurasi global `agent.auto_save_seconds`)
+    - Per sesi: ` /ask set autosave=<seconds>` (0 untuk menonaktifkan)
 
 ### Integrasi Ollama
 - Pastikan Ollama berjalan lokal (`ollama serve`) dan model tersedia (mis. `ollama pull llama3`).
