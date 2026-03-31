@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Any
 import re
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
 
 from .config import Config
 from .gateway import Gateway
@@ -121,8 +122,33 @@ class TelegramBridge:
         req = Request(self.api_url("sendMessage"), data=body, headers={"Content-Type": "application/json"}, method="POST")
         if self.verbose:
             print(f"[telegram] send_message to {chat_id}: {len(text)} chars")
-        with urlopen(req, timeout=30) as resp:
-            resp.read()
+            if len(text) > 3500:
+                print(f"[telegram] warn: message length may exceed Telegram limits (len={len(text)})")
+        try:
+            with urlopen(req, timeout=30) as resp:
+                data = resp.read().decode("utf-8", "ignore")
+                status = resp.getcode()
+                ok = True
+                msg_id = None
+                try:
+                    j = json.loads(data)
+                    ok = bool(j.get("ok", True))
+                    msg_id = ((j.get("result") or {}).get("message_id"))
+                except Exception:
+                    pass
+                if self.verbose:
+                    print(f"[telegram] send_message resp status={status} ok={ok} msg_id={msg_id}")
+        except HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", "ignore")
+            except Exception:
+                pass
+            print(f"[telegram] send_message error status={e.code} body={err_body[:500]}")
+        except URLError as e:
+            print(f"[telegram] send_message network error: {e}")
+        except Exception as e:
+            print(f"[telegram] send_message unexpected error: {e}")
 
     @staticmethod
     def _escape_html(s: str) -> str:
@@ -251,9 +277,65 @@ class TelegramBridge:
         if opts.get("name"):
             info.append(f"Nama sesi: {opts.get('name')}")
         if opts.get("model"):
-            info.append(f"Model teks: {opts.get('model')}")
+            info.append(f"Model teks (override sesi): {opts.get('model')}")
         if opts.get("vision_model"):
-            info.append(f"Model visi: {opts.get('vision_model')}")
+            info.append(f"Model visi (override sesi): {opts.get('vision_model')}")
+        if opts.get("cwd"):
+            info.append(f"CWD (override sesi): {opts.get('cwd')}")
+        if "context_window" in opts:
+            info.append(f"Jendela konteks (override sesi): {opts.get('context_window')}")
+        if "allow_shell" in opts:
+            info.append(f"Izin shell (override sesi): {bool(opts.get('allow_shell'))}")
+        if "auto_save_seconds" in opts:
+            info.append(f"Autosave (override sesi): {opts.get('auto_save_seconds')} detik")
+        cfg = self.cfg
+        info.append("Konfigurasi terapan:")
+        info.append(f"Channels: {', '.join(cfg.channels)}")
+        ag = cfg.agent or {}
+        info.append(f"Agent.allow_shell={bool(ag.get('allow_shell', True))}")
+        info.append(f"Agent.cwd={ag.get('cwd', str(cfg.workspace_dir))}")
+        info.append(f"Agent.stream={bool(ag.get('stream', True))}")
+        info.append(f"Agent.planner={ag.get('planner', 'ndjson')}")
+        info.append(f"Agent.temperature={ag.get('temperature', 0.0)}")
+        info.append(f"Agent.auto_save_seconds={ag.get('auto_save_seconds', 60)}")
+        oll = (cfg.integrations.get("ollama") or {})
+        if oll:
+            if oll.get("endpoint"):
+                info.append(f"Ollama.endpoint={oll.get('endpoint')}")
+            if oll.get("default_model"):
+                info.append(f"Ollama.default_model={oll.get('default_model')}")
+            if oll.get("vision_model"):
+                info.append(f"Ollama.vision_model={oll.get('vision_model')}")
+        rag = getattr(cfg, "rag", {}) or {}
+        if rag:
+            info.append(f"RAG.enabled={bool(rag.get('enabled', False))}")
+            if rag.get("vector_store"):
+                info.append(f"RAG.vector_store={rag.get('vector_store')}")
+            if rag.get("embedding_model"):
+                info.append(f"RAG.embedding_model={rag.get('embedding_model')}")
+            for k in ("chunk_size_tokens", "chunk_overlap_tokens", "top_k", "mmr_lambda", "auto_index_interval_seconds"):
+                if k in rag:
+                    info.append(f"RAG.{k}={rag.get(k)}")
+            srcs = rag.get("sources") or []
+            if srcs:
+                info.append(f"RAG.sources={', '.join(srcs)}")
+            tidb = rag.get("tidb") or {}
+            if tidb:
+                if tidb.get("host"):
+                    info.append(f"TiDB.host={tidb.get('host')}")
+                if "port" in tidb:
+                    info.append(f"TiDB.port={tidb.get('port')}")
+                if tidb.get("database"):
+                    info.append(f"TiDB.database={tidb.get('database')}")
+                if "ssl" in tidb:
+                    info.append("TiDB.ssl=enabled")
+        mcp = getattr(cfg, "mcp", {}) or {}
+        if mcp:
+            info.append(f"MCP.mode={mcp.get('mode', 'client')}")
+            servers = mcp.get("servers") or []
+            if servers:
+                names = [str(s.get("name")) for s in servers if s.get("name")]
+                info.append(f"MCP.servers={len(servers)} ({', '.join(names)})")
         ptxt = self._persona_text(chat_id)
         if ptxt:
             info.append("Persona:")
@@ -485,6 +567,16 @@ class TelegramBridge:
                     elif document and str(document.get("mime_type", "")).startswith("image/"):
                         file_id = document.get("file_id")
                         handled_image = self.handle_image(chat_id, file_id, caption)
+                    elif document:
+                        # Tangani dokumen umum: simpan ke workspace dan indeks ke RAG jika diminta
+                        try:
+                            self.handle_document(chat_id, document, caption)
+                            continue
+                        except Exception as e:
+                            if self.verbose:
+                                print(f"[telegram] document error: {e}")
+                            self._send_text_or_code(chat_id, f"Error dokumen: {e}")
+                            continue
                     if handled_image:
                         continue
                     else:
@@ -502,19 +594,29 @@ class TelegramBridge:
         if m:
             raw_tail = (m.group(1) or "").strip()
             tail = raw_tail.lower()
+            if self.verbose:
+                print(f"[ask] tail='{tail}' raw='{raw_tail}'")
             if tail == "" or tail.startswith("start"):
                 parts = tail.split()
                 # Default nama sesi ke 'jon' jika tidak diberikan
                 name = parts[1] if len(parts) >= 2 else "jon"
+                if self.verbose:
+                    print(f"[ask] start name='{name}'")
                 self._start_session(chat_id, name)
                 return
             if tail.startswith("stop") or tail.startswith("end"):
+                if self.verbose:
+                    print("[ask] stop")
                 self._stop_session(chat_id)
                 return
             if tail in ("help", "?", "h"):
+                if self.verbose:
+                    print("[ask] help requested")
                 self._send_text_or_code(chat_id, self._help_text())
                 return
             if tail.startswith("models"):
+                if self.verbose:
+                    print("[ask] models")
                 txt = self._list_ollama_models()
                 self._send_text_or_code(chat_id, txt)
                 return
@@ -550,6 +652,8 @@ class TelegramBridge:
                 self._send_text_or_code(chat_id, "Setelan sesi diperbarui.")
                 return
             if tail.startswith("save"):
+                if self.verbose:
+                    print("[ask] save")
                 parts = tail.split()
                 if len(parts) >= 2:
                     self._save_session_named(chat_id, parts[1])
@@ -557,6 +661,8 @@ class TelegramBridge:
                     self._save_session(chat_id)
                 return
             if tail.startswith("load"):
+                if self.verbose:
+                    print("[ask] load")
                 parts = tail.split()
                 if len(parts) >= 2:
                     self._load_session_named(chat_id, parts[1])
@@ -564,9 +670,13 @@ class TelegramBridge:
                     self._send_text_or_code(chat_id, "Format: /ask load <nama>")
                 return
             if tail.startswith("list"):
+                if self.verbose:
+                    print("[ask] list")
                 self._list_sessions(chat_id)
                 return
             if tail.startswith("info"):
+                if self.verbose:
+                    print("[ask] info")
                 self._send_text_or_code(chat_id, self._session_info(chat_id))
                 return
             if tail.startswith("persona"):
@@ -592,6 +702,10 @@ class TelegramBridge:
                 else:
                     self._send_text_or_code(chat_id, "Persona lengkap. Silakan mulai percakapan.")
                 return
+            if self.verbose:
+                print(f"[ask] unknown tail '{tail}' -> help")
+            self._send_text_or_code(chat_id, self._help_text())
+            return
         # Alias sederhana untuk memulai: /start
         if tl.strip() in ("/start", "start"):
             # Gunakan 'jon' sebagai nama default saat memulai sesi cepat
@@ -657,6 +771,57 @@ class TelegramBridge:
             raw = t
             # Simpan input pengguna untuk konteks
             self.history.setdefault(chat_id, []).append(f"U: {t}")
+            pend = (self.session_opts.get(chat_id, {}) or {}).get("pending_file")
+            if pend:
+                ans = tl
+                if ans in ("ya", "yes", "y", "lanjut", "ok", "analisa") or ans.startswith("/confirm") or ans == pend.get("suggest_name", "").lower():
+                    p = Path(pend.get("suggest_path"))
+                    if p.exists():
+                        try:
+                            content = p.read_text(errors="ignore")
+                        except Exception as e:
+                            self._send_text_or_code(chat_id, f"Error baca file: {e}")
+                            self.session_opts.get(chat_id, {}).pop("pending_file", None)
+                            return
+                        self.session_opts.get(chat_id, {}).pop("pending_file", None)
+                        self._send_text_or_code(chat_id, f"Konfirmasi: {p.name}. Analisa dimulai.")
+                        opts = self.session_opts.get(chat_id, {})
+                        cwd = Path(opts.get("cwd") or self.cfg.agent.get("cwd", self.cfg.workspace_dir))
+                        allow_shell = bool(opts.get("allow_shell", self.cfg.agent.get("allow_shell", True)))
+                        sess = Session(cwd=cwd, allow_shell=allow_shell)
+                        def emit(s: str) -> None:
+                            self.history.setdefault(chat_id, []).append(f"A: {s}")
+                            self._send_text_or_code(chat_id, s)
+                        use_stream = bool(self.cfg.agent.get("stream", True))
+                        persona_text = self._build_context(chat_id)
+                        planner_type = str(self.cfg.agent.get("planner", "ndjson")).lower()
+                        temperature = float(self.cfg.agent.get("temperature", 0.2))
+                        default_text_model = (self.cfg.integrations.get("ollama") or {}).get("default_model", "llama3")
+                        mem = f"Target: {p}\nIsi:\n" + (content[:6000])
+                        try:
+                            if planner_type == "langchain":
+                                from .agent.langchain_planner import plan_and_execute_lc
+                                model = default_text_model
+                                if self.verbose:
+                                    print(f"[planner] text via LangChain model={model} temp={temperature} stream={use_stream}")
+                                plan_and_execute_lc(raw, self.gw, sess, emit, model=model, system_text=((persona_text or "") + "\n" + mem), temperature=temperature)
+                            else:
+                                if self.verbose:
+                                    print(f"[planner] text via NDJSON model={default_text_model} temp={temperature} stream={use_stream}")
+                                plan_and_execute(
+                                    raw, self.gw, sess, emit,
+                                    debug=self.verbose,
+                                    use_stream=use_stream,
+                                    memory=((persona_text or "") + "\n" + mem),
+                                    model_options={"temperature": temperature}
+                                )
+                        except Exception as e:
+                            self._send_text_or_code(chat_id, f"Error: {e}")
+                        return
+                elif ans in ("tidak", "no", "n"):
+                    self.session_opts.get(chat_id, {}).pop("pending_file", None)
+                    self._send_text_or_code(chat_id, "Dibatalkan. File tidak dikonfirmasi.")
+                    return
             if self._wizard_active(chat_id):
                 self._wizard_handle_answer(chat_id, t)
                 return
@@ -669,6 +834,72 @@ class TelegramBridge:
             cwd = Path(opts.get("cwd") or self.cfg.agent.get("cwd", self.cfg.workspace_dir))
             allow_shell = bool(opts.get("allow_shell", self.cfg.agent.get("allow_shell", True)))
             sess = Session(cwd=cwd, allow_shell=allow_shell)
+            # Deteksi permintaan file/path yang tidak lengkap lalu konfirmasi
+            token = None
+            parts = t.split()
+            for w in reversed(parts):
+                if ("/" in w) or ("." in w) or (w.lower().startswith("readme") or w.lower().endswith("_engclaw")):
+                    token = w
+                    break
+            if token:
+                base = Path(cwd)
+                cand = base / token if not Path(token).is_absolute() else Path(token)
+                if self.verbose:
+                    print(f"[file] probe token={token} base={base}")
+                if cand.exists():
+                    self.session_opts.setdefault(chat_id, {})["pending_file"] = {"suggest_path": str(cand), "suggest_name": cand.name}
+                    self._send_text_or_code(chat_id, f"File ditemukan: {cand}. Analisa sekarang? Balas 'ya' atau 'tidak'.")
+                    return
+                # cari kandidat
+                picks = []
+                name = Path(token).name
+                exts = [".md", ".txt", ".json", ".py"]
+                for ext in exts:
+                    p = base / (name + ext)
+                    if p.exists():
+                        picks.append(p)
+                if not picks:
+                    for p in base.rglob("*"):
+                        if p.is_file() and (name.lower() in p.name.lower() or p.stem.lower() == name.lower()):
+                            picks.append(p)
+                            if len(picks) >= 10:
+                                break
+                if picks:
+                    choice = sorted(picks, key=lambda x: (0 if x.suffix in (".md", ".txt") else 1, len(x.name)))[0]
+                    self.session_opts.setdefault(chat_id, {})["pending_file"] = {"suggest_path": str(choice), "suggest_name": choice.name}
+                    extras = ", ".join(p.name for p in picks[:5])
+                    msg = f"File '{name}' tidak ditemukan. Maksud Anda '{choice.name}'? Balas 'ya' untuk konfirmasi atau 'tidak' untuk batal."
+                    if len(picks) > 1:
+                        msg += f"\nKandidat lain: {extras}"
+                    self._send_text_or_code(chat_id, msg)
+                    return
+                else:
+                    self._send_text_or_code(chat_id, f"File '{name}' tidak dapat diidentifikasi di workspace.")
+                    return
+            m_file = re.search(r"\b(file|berkas)\s+([A-Za-z0-9_.\-]+)\b", t, flags=re.IGNORECASE)
+            if m_file:
+                name = m_file.group(2)
+                base = Path(cwd)
+                candidate = base / name
+                if not candidate.exists():
+                    exts = [".md", ".txt", ".json", ".py"]
+                    picks = []
+                    for ext in exts:
+                        p = base / (name + ext)
+                        if p.exists():
+                            picks.append(p)
+                    if not picks:
+                        for p in base.rglob("*"):
+                            if p.is_file() and (name.lower() in p.name.lower() or p.stem.lower() == name.lower()):
+                                picks.append(p)
+                    if picks:
+                        choice = sorted(picks, key=lambda x: (0 if x.suffix in (".md", ".txt") else 1, len(x.name)))[0]
+                        self.session_opts.setdefault(chat_id, {})["pending_file"] = {"suggest_path": str(choice), "suggest_name": choice.name}
+                        self._send_text_or_code(chat_id, f"File '{name}' tidak ditemukan. Maksud Anda '{choice.name}'? Balas 'ya' untuk konfirmasi atau 'tidak' untuk batal.")
+                        return
+                    else:
+                        self._send_text_or_code(chat_id, f"File '{name}' tidak dapat diidentifikasi di workspace.")
+                        return
             def emit(s: str) -> None:
                 self.history.setdefault(chat_id, []).append(f"A: {s}")
                 self._send_text_or_code(chat_id, s)
@@ -735,6 +966,38 @@ class TelegramBridge:
         else:
             self._send_text_or_code(chat_id, f"Error: {resp.get('error')}")
         return True
+
+    def handle_document(self, chat_id: int, document: dict, caption: str | str | None) -> None:
+        file_id = document.get("file_id")
+        file_name = document.get("file_name") or f"upload_{file_id or 'unknown'}"
+        mime = str(document.get("mime_type", ""))
+        if self.verbose:
+            print(f"[doc] recv file_id={file_id} name={file_name} mime={mime} caption_len={len(caption or '')}")
+        fp = self._get_file_path(file_id)
+        if not fp:
+            raise RuntimeError("file path tidak ditemukan dari Telegram")
+        content = self._download_file_bytes(fp)
+        # Simpan ke workspace/docs
+        target_dir = self.cfg.workspace_dir / "docs"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst = target_dir / file_name
+        dst.write_bytes(content)
+        if self.verbose:
+            print(f"[doc] saved to {dst} bytes={len(content)}")
+        # Heuristik: jika caption mengandung kata kunci, lakukan indeks RAG
+        want_index = False
+        c = (caption or "").lower()
+        for kw in ("rag", "index", "simpan di rag", "pelajari"):
+            if kw in c:
+                want_index = True
+                break
+        if want_index:
+            rag_cfg = self.cfg.rag or {}
+            store = get_rag_store(self.cfg.workspace_dir, rag_cfg, self.cfg.integrations)
+            added = store.index_file(dst)
+            self._send_text_or_code(chat_id, f"Dokumen disimpan: {dst}\nRAG diindeks: {added} chunks")
+        else:
+            self._send_text_or_code(chat_id, f"Dokumen disimpan: {dst}")
 
 
 def run_bot_via_cli(token_arg: str | None, verbose: bool = False) -> int:
