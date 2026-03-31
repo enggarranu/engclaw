@@ -1,5 +1,4 @@
-from pyclaw.cli import *
+from __future__ import annotations
 
-if __name__ == "__main__":
-    main()
+from pyclaw.cli import main as main  # noqa: F401
 

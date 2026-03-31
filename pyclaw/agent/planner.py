@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional
+from ..rag_store import get_rag_store
 
 
 @dataclass
@@ -93,6 +94,45 @@ def _execute_data(data: dict, gateway, session: Session, on_output: Callable[[st
             else:
                 items = path.name
             on_output(f"[file_list] {path}\n{items}")
+            return True
+        if tool == "rag_search":
+            query = str(data.get("query") or "")
+            top_k = int(data.get("top_k", 5))
+            store = get_rag_store(Path(gateway.workspace_dir), (gateway.integrations.get("rag") or {}), gateway.integrations)
+            hits = store.search(query, top_k=top_k)
+            if not hits:
+                on_output("[rag_search] no hits")
+                return True
+            lines = [f"[rag_search] {len(hits)} hits"]
+            for h in hits:
+                lines.append(f"- {h['doc_id']}#{h['chunk_id']} score={h['score']:.3f}\n{h['text']}")
+            on_output("\n".join(lines))
+            return True
+        if tool == "rag_index":
+            store = get_rag_store(Path(gateway.workspace_dir), (gateway.integrations.get("rag") or {}), gateway.integrations)
+            total = store.index_workspace() + store.index_readme()
+            on_output(f"[rag_index] indexed {total} chunks")
+            return True
+        if tool == "rag_sources":
+            store = get_rag_store(Path(gateway.workspace_dir), (gateway.integrations.get("rag") or {}), gateway.integrations)
+            on_output("[rag_sources]\n" + "\n".join(store.list_sources()))
+            return True
+        if tool == "mcp_call":
+            from ..mcp_client import MCPClient
+            srv = str(data.get("server") or "")
+            tool_name = str(data.get("tool") or "")
+            args = dict(data.get("args") or {})
+            client = MCPClient(gateway.integrations.get("mcp") or {})
+            res = client.call(srv, tool_name, args)
+            on_output(json.dumps(res))
+            return True
+        if tool == "mcp_resource_read":
+            from ..mcp_client import MCPClient
+            srv = str(data.get("server") or "")
+            uri = str(data.get("uri") or "")
+            client = MCPClient(gateway.integrations.get("mcp") or {})
+            res = client.resource_read(srv, uri)
+            on_output(json.dumps(res))
             return True
     except Exception as e:
         on_output(f"Error: {e}")

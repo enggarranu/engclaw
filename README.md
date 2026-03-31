@@ -11,7 +11,7 @@ Engclaw adalah proyek contoh asisten AI pribadi sederhana berbasis Python, terin
 
 ## Struktur Direktori
 ```
-engclaw/  # alias ke implementasi lama (pyclaw) agar import lebih natural
+Engclaw/
   cli.py            # CLI: onboard, list-skills, run
   config.py         # Konfigurasi: baca/tulis config JSON
   workspace.py      # Workspace: memastikan folder skills/logs/data
@@ -27,7 +27,7 @@ examples/
 ```
 
 ## Instalasi & Jalankan
-Default tanpa dependensi eksternal — gunakan Python bawaan.
+Install dependencies agar fitur RAG + MCP berjalan mulus.
 
 - Onboard dan buat workspace:
 ```
@@ -55,13 +55,13 @@ python -m engclaw.cli run fetch
 python -m engclaw.cli run shell
 ```
 
-Jika ingin memakai planner berbasis LangChain, instal dependensi opsional:
+Instal semua dependensi:
 ```
 pip install -r requirements.txt
 ```
 
 ### Integrasi Telegram
-- Simpan token di config: jalankan onboard dulu, lalu edit `pyclaw.config.json` dan tambahkan:
+- Simpan token di config: jalankan onboard dulu, lalu edit `engclaw.config.json` dan tambahkan:
 ```
 {
   "integrations": {
@@ -93,7 +93,7 @@ python -m engclaw.cli telegram-bot --token 123456:ABCDEF...
 python -m engclaw.cli run ask
 ```
 
-#### Konfigurasi model dan endpoint di `pyclaw.config.json`
+#### Konfigurasi model dan endpoint di `engclaw.config.json`
 Anda bisa mengatur model default dan endpoint Ollama agar fleksibel:
 ```
 {
@@ -125,14 +125,14 @@ Vision:
 - Atur model visi global di `integrations.ollama.vision_model`, atau per sesi dengan `/ask set vision=<model>`.
 
 ### Mode Agentik & Streaming
-- Planner: `pyclaw/agent/planner.py` menunggu NDJSON dari model: `{ "say": ... }` atau `{ "tool": "shell", "command": ... }` atau `{ "tool": "skill", "name": ... }`.
-- Kanal Ollama streaming: `pyclaw/channels/ollama.py` menyediakan `send_stream` untuk membaca NDJSON baris-demi-baris.
+- Planner: `engclaw/agent/planner.py` menunggu NDJSON dari model: `{ "say": ... }` atau `{ "tool": "shell", "command": ... }` atau `{ "tool": "skill", "name": ... }`.
+- Kanal Ollama streaming: `engclaw/channels/ollama.py` menyediakan `send_stream` untuk membaca NDJSON baris-demi-baris.
 - Telegram bridge akan mengirim hasil secara bertahap dalam blok `<pre>` agar rapi dan mudah dibaca.
 - Skill tanpa `model` akan memakai `default_model` di atas (contoh: `examples/ask_default.json`).
 - Di Telegram, Anda bisa override per pesan: `ask llama3: tulis haiku` atau cukup `ask ...` untuk pakai default.
 
 ### Planner LangChain (opsional)
-- Aktifkan dengan menambah konfigurasi berikut di `pyclaw.config.json`:
+- Aktifkan dengan menambah konfigurasi berikut di `engclaw.config.json`:
 ```
 {
   "agent": {
@@ -150,3 +150,51 @@ Vision:
 - Semua kode diberi komentar untuk menjelaskan fungsi tiap blok.
 - Format skill menggunakan JSON sederhana agar mudah diadopsi.
 - Ini adalah baseline yang bisa dikembangkan: tambah kanal baru, tambah jenis aksi baru, atau integrasi ke sistem lain.
+
+## RAG (Retrieval Augmented Generation)
+- Tujuan: indeks dokumen lokal/eksternal, lakukan retrieval cepat, jawab dengan citation.
+- Konfigurasi di `engclaw.config.json` (contoh minimal):
+```
+{
+  "rag": {
+    "enabled": true,
+    "vector_store": "tidb_cloud",
+    "tidb": {
+      "host": "your-host.tidbcloud.com",
+      "port": 4000,
+      "user": "your_user",
+      "password": "your_password",
+      "database": "engclaw_rag"
+    },
+    "embedding_model": "qwen2-embed",
+    "chunk_size_tokens": 512,
+    "chunk_overlap_tokens": 128,
+    "top_k": 5,
+    "mmr_lambda": 0.5,
+    "sources": ["workspace", "git", "readme", "web"],
+    "auto_index_interval_seconds": 300
+  }
+}
+```
+- Perintah Telegram (akan tersedia saat RAG diaktifkan):
+  - `/rag index [workspace|git|web|readme]`
+  - `/rag add <type> <uri>`
+  - `/rag search <query>`
+- Tips performa: gunakan chunk 512/128, top_k=5, MMR=0.5, kompresi query untuk pertanyaan panjang.
+
+## MCP (Model Context Protocol) — Client Only
+- Engclaw sebagai klien MCP untuk memakai tools/resources dari server eksternal.
+- Konfigurasi di `engclaw.config.json`:
+```
+{
+  "mcp": {
+    "mode": "client",
+    "servers": [
+      { "name": "filesystem", "transport": "stdio", "command": "mcp-filesystem", "allowed_tools": ["readFile", "listDir"] }
+    ]
+  }
+}
+```
+- Perintah Telegram (saat MCP aktif):
+  - `/mcp list`, `/mcp connect <name>`, `/mcp tools <name>`
+- Keamanan: whitelist tools, payload size limit, audit log; data lokal tidak diupload ke luar secara default.

@@ -1,4 +1,14 @@
+requests>=2.31.0
+numpy>=1.26.0
+faiss-cpu>=1.7.4
+pymysql>=1.1.0
+GitPython>=3.1.43
+readability-lxml>=0.8.1
+beautifulsoup4>=4.12.3
 langchain>=0.2.0
 langchain-community>=0.2.0
 langchain-ollama>=0.1.0
-
+# Optional vector store alternative
+chromadb>=0.5.0
+# Optional domain normalization for crawler
+tldextract>=5.1.2

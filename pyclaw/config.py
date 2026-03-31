@@ -30,7 +30,7 @@ class Config:
     # Agar mudah ditulis di lingkungan sandbox yang mungkin membatasi akses HOME
     DEFAULT_PATH = Path.cwd() / "pyclaw.config.json"
 
-    def __init__(self, workspace_dir: Path, skills_dir: Path, channels: list[str] | None = None, integrations: Dict[str, Any] | None = None, agent: Dict[str, Any] | None = None):
+    def __init__(self, workspace_dir: Path, skills_dir: Path, channels: list[str] | None = None, integrations: Dict[str, Any] | None = None, agent: Dict[str, Any] | None = None, rag: Dict[str, Any] | None = None, mcp: Dict[str, Any] | None = None):
         # Menyimpan path workspace dan skills sebagai atribut objek
         self.workspace_dir = workspace_dir
         self.skills_dir = skills_dir
@@ -40,6 +40,9 @@ class Config:
         self.integrations: Dict[str, Any] = integrations or {}
         # Pengaturan agent (mis. izin shell, cwd)
         self.agent: Dict[str, Any] = agent or {"allow_shell": True, "cwd": str(workspace_dir), "stream": True, "planner": "ndjson", "temperature": 0.2, "auto_save_seconds": 60}
+        # Pengaturan RAG dan MCP (opsional)
+        self.rag: Dict[str, Any] = rag or {"enabled": False, "vector_store": "chroma", "embedding_model": "qwen2-embed", "chunk_size_tokens": 512, "chunk_overlap_tokens": 128, "top_k": 5, "mmr_lambda": 0.5}
+        self.mcp: Dict[str, Any] = mcp or {"mode": "client", "servers": []}
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
@@ -65,6 +68,8 @@ class Config:
             channels=list(data.get("channels") or ["terminal", "http"]),
             integrations=dict(data.get("integrations") or {}),
             agent=dict(data.get("agent") or {}),
+            rag=dict(data.get("rag") or {}),
+            mcp=dict(data.get("mcp") or {}),
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -83,5 +88,7 @@ class Config:
             "channels": self.channels,
             "integrations": self.integrations,
             "agent": self.agent,
+            "rag": self.rag,
+            "mcp": self.mcp,
         }
         cfg_path.write_text(json.dumps(data, indent=2))

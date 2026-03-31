@@ -23,6 +23,7 @@ from urllib.request import urlopen, Request
 from .config import Config
 from .gateway import Gateway
 from .agent.planner import Session, plan_and_execute
+from .rag_store import get_rag_store
 
 
 class TelegramBridge:
@@ -431,6 +432,30 @@ class TelegramBridge:
                     _time.sleep(max(5, int(self._auto_save_seconds)))
             threading.Thread(target=_autosave_loop, daemon=True).start()
 
+        # Jalankan thread indexing RAG jika diaktifkan
+        try:
+            rag_cfg = self.cfg.rag or {}
+        except Exception:
+            rag_cfg = {}
+        if bool(rag_cfg.get("enabled", False)):
+            interval = int(rag_cfg.get("auto_index_interval_seconds", 300))
+            if interval > 0:
+                def _rag_loop():
+                    import time as _t
+                    while True:
+                        try:
+                            store = get_rag_store(self.cfg.workspace_dir, rag_cfg, self.cfg.integrations)
+                            total = store.index_workspace() + store.index_readme()
+                            if self.verbose and total:
+                                print(f"[rag] indexed {total} chunks")
+                        except Exception as e:
+                            if self.verbose:
+                                print(f"[rag] error: {e}")
+                        _t.sleep(interval)
+                threading.Thread(target=_rag_loop, daemon=True).start()
+                if self.verbose:
+                    print(f"[rag] scheduler started interval={interval}s enabled=true store={rag_cfg.get('vector_store')} model={rag_cfg.get('embedding_model')}")
+
         while True:
             try:
                 updates = self.get_updates()
@@ -574,6 +599,38 @@ class TelegramBridge:
             self._start_session(chat_id, default_name)
             return
 
+        # Perintah RAG
+        m_rag = re.match(r"^/rag(?:@\w+)?(?:\s+(.*))?$", t, flags=re.IGNORECASE)
+        if m_rag:
+            tail = (m_rag.group(1) or "").strip()
+            rag_cfg = self.cfg.rag or {}
+            store = get_rag_store(self.cfg.workspace_dir, rag_cfg, self.cfg.integrations)
+            if tail.lower().startswith("index") or tail == "":
+                total = store.index_workspace() + store.index_readme()
+                self._send_text_or_code(chat_id, f"RAG diindeks: {total} chunks")
+                return
+            if tail.lower().startswith("search "):
+                q = tail.split(" ", 1)[1].strip()
+                hits = store.search(q, top_k=int(rag_cfg.get("top_k", 5)))
+                if not hits:
+                    self._send_text_or_code(chat_id, "Tidak ada hasil.")
+                    return
+                lines = [f"Hasil: {len(hits)}"]
+                for h in hits:
+                    lines.append(f"- {h['doc_id']}#{h['chunk_id']} score={h['score']:.3f}\n{h['text']}")
+                self._send_text_or_code(chat_id, "\n".join(lines))
+                return
+            if tail.lower().startswith("add "):
+                parts = tail.split()
+                if len(parts) >= 3:
+                    type_ = parts[1]
+                    uri = " ".join(parts[2:])
+                    store.add_source(type_, uri)
+                    self._send_text_or_code(chat_id, "Sumber ditambahkan.")
+                else:
+                    self._send_text_or_code(chat_id, "Format: /rag add <type> <uri>")
+                return
+
         # Aksi eksplisit: run
         if tl.startswith("run ") or tl.startswith("/run "):
             name = t.split(" ", 1)[1].strip() if " " in t else ""
@@ -694,5 +751,16 @@ def run_bot_via_cli(token_arg: str | None, verbose: bool = False) -> int:
         cfg.channels.append("ollama")
     # Menjalankan loop bot
     print("[telegram] starting bot loop (verbose=" + str(verbose) + ")")
+    try:
+        rag_cfg = cfg.rag or {}
+    except Exception:
+        rag_cfg = {}
+    try:
+        mcp_cfg = cfg.mcp or {}
+    except Exception:
+        mcp_cfg = {}
+    print(f"[init] channels={cfg.channels}")
+    print(f"[init] rag.enabled={bool(rag_cfg.get('enabled', False))} store={rag_cfg.get('vector_store')} embed_model={rag_cfg.get('embedding_model')}")
+    print(f"[init] mcp.mode={mcp_cfg.get('mode', 'client')} servers={len(mcp_cfg.get('servers', []))}")
     TelegramBridge(token, cfg, verbose=verbose).loop()
     return 0
